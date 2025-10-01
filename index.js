@@ -14,12 +14,19 @@ if (!token) {
 }
 
 // Validate required environment variables
-const requiredEnvVars = ['TELEGRAM_API_TOKEN', 'MONGODB_URI', 'OPENROUTER_API_KEY_FAST', 'OPENROUTER_API_KEY_SLOW'];
+const requiredEnvVars = ['TELEGRAM_API_TOKEN', 'MONGODB_URI'];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingVars.length > 0) {
     console.error(`FATAL ERROR: Missing environment variables: ${missingVars.join(', ')}`);
     console.error('Please check your .env file. See .env.example for reference.');
     process.exit(1);
+}
+
+// Check for optional AI features
+const hasAI = !!process.env.OPENROUTER_API_KEY;
+if (!hasAI) {
+    console.warn('⚠️  AI features disabled: OPENROUTER_API_KEY not set');
+    console.warn('   The bot will work but AI features (follow-up questions, summaries, quizzes) will be disabled.');
 }
 
 const bot = new TelegramBot(token, { polling: true });
@@ -68,10 +75,18 @@ function generatePdfBuffer(buildPdfCallback) {
 
 // --- CORE LOGIC FUNCTIONS ---
 async function startQuiz(chatId) {
+    if (!hasAI) {
+        await bot.sendMessage(chatId, "❌ Quiz feature requires AI setup. Please configure OPENROUTER_API_KEY in your .env file.");
+        return;
+    }
     await bot.sendMessage(chatId, "🧠 How would you like to take your quiz?", getQuizFormatKeyboard());
 }
 
 async function generatePdfQuiz(chatId) {
+    if (!hasAI) {
+        await bot.sendMessage(chatId, "❌ Quiz feature requires AI setup.");
+        return;
+    }
     await bot.sendMessage(chatId, "🧠 Preparing your personalized quiz as a PDF...");
     const learnings = await db.getLearningsForDateRange(chatId, subDays(new Date(), 7), new Date());
     if (learnings.length < 3) { await bot.sendMessage(chatId, "📚 You need at least 3 learnings from the past week to generate a quiz."); return; }
@@ -87,6 +102,10 @@ async function generatePdfQuiz(chatId) {
 }
 
 async function startInlineQuiz(chatId) {
+    if (!hasAI) {
+        await bot.sendMessage(chatId, "❌ Quiz feature requires AI setup.");
+        return;
+    }
     await bot.sendMessage(chatId, "💬 Let's start! I'll ask you questions one by one. Use /stop when you want to end the quiz.");
     const learnings = await db.getLearningsForDateRange(chatId, subDays(new Date(), 7), new Date());
     if (learnings.length < 3) { await bot.sendMessage(chatId, "📚 You need at least 3 learnings from the past week to start a quiz."); return; }
@@ -145,7 +164,7 @@ async function processLearningEntry(chatId, content, category = null, generateFo
         if (todayCount >= userGoal) { progressText += `\n🎉 Daily goal achieved! Streak: ${streak} days`; }
     }
     await bot.sendMessage(chatId, progressText, { parse_mode: 'Markdown' });
-    if (generateFollowUp) {
+    if (generateFollowUp && hasAI) {
         await bot.sendMessage(chatId, "🤔 Let me think of a good question...");
         const followUp = await ai.generateFollowUpQuestion(sanitizedContent);
         userStates[chatId] = { command: 'ai_convo', originalContent: sanitizedContent };
@@ -253,7 +272,21 @@ bot.onText(/\/goals/, async (msg) => { await sendGoalManagementMessage(msg.chat.
 bot.onText(/\/view/, (msg) => { const chatId = msg.chat.id; bot.sendMessage(chatId, "👀 *View Your Learning History*\n\nWhich period would you like to see?", { parse_mode: 'Markdown', ...getViewOptionsKeyboard() }); });
 bot.onText(/\/export/, async (msg) => { await handleExport(msg.chat.id); });
 bot.onText(/\/quiz/, async (msg) => { await startQuiz(msg.chat.id); });
-bot.onText(/\/summarize/, async (msg) => { const chatId = msg.chat.id; await bot.sendMessage(chatId, "🤖 Analyzing your learning journey... This might take a moment."); const learnings = await db.getLearningsForDateRange(chatId, subDays(new Date(), 7), new Date()); if (learnings.length === 0) { await bot.sendMessage(chatId, "📭 No learnings from the past week."); return; } const summary = await ai.generateWeeklyAnalysis(learnings, 'summary'); await bot.sendMessage(chatId, `📝 *Your Weekly Learning Summary*\n\n${summary}`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🧠 Take Quiz', callback_data: 'start_quiz' }, { text: '🔙 Main Menu', callback_data: 'main_menu' }]] } }); });
+bot.onText(/\/summarize/, async (msg) => {
+    const chatId = msg.chat.id;
+    if (!hasAI) {
+        await bot.sendMessage(chatId, "❌ Summary feature requires AI setup. Please configure OPENROUTER_API_KEY in your .env file.");
+        return;
+    }
+    await bot.sendMessage(chatId, "🤖 Analyzing your learning journey... This might take a moment.");
+    const learnings = await db.getLearningsForDateRange(chatId, subDays(new Date(), 7), new Date());
+    if (learnings.length === 0) {
+        await bot.sendMessage(chatId, "📭 No learnings from the past week.");
+        return;
+    }
+    const summary = await ai.generateWeeklyAnalysis(learnings, 'summary');
+    await bot.sendMessage(chatId, `📝 *Your Weekly Learning Summary*\n\n${summary}`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🧠 Take Quiz', callback_data: 'start_quiz' }, { text: '🔙 Main Menu', callback_data: 'main_menu' }]] } });
+});
 bot.onText(/\/stop/, (msg) => { const chatId = msg.chat.id; if (userStates[chatId] && (userStates[chatId].command === 'inline_quiz' || userStates[chatId].command === 'ai_convo')) { delete userStates[chatId]; bot.sendMessage(chatId, "✅ *Session ended!* Great job.", { parse_mode: 'Markdown', ...getMainMenuKeyboard() }); } else { bot.sendMessage(chatId, "ℹ️ No active session to stop."); } });
 
 bot.on('callback_query', async (callbackQuery) => {
@@ -304,6 +337,7 @@ bot.on('callback_query', async (callbackQuery) => {
         else if (action === 'quick_learn') { await bot.sendMessage(chatId, "⚡ *Quick Learning Entry*\n\nWhat did you learn?", { parse_mode: 'Markdown', reply_markup: { force_reply: true } }); userStates[chatId] = { command: 'quick_learn' }; }
         else if (action === 'show_stats') { await showUserStats(chatId); }
         else if (action === 'start_quiz') { await startQuiz(chatId); }
+        else if (action === 'start_search') { await bot.sendMessage(chatId, "🔍 *Search Your Learnings*\n\nWhat topic would you like to search for?", { parse_mode: 'Markdown', reply_markup: { force_reply: true, input_field_placeholder: "Search for..." } }); userStates[chatId] = { command: 'search' }; }
         else if (action === 'main_menu') { await bot.editMessageText("🏠 *Main Menu*\n\nWhat would you like to do?", { chat_id: chatId, message_id: callbackQuery.message.message_id, parse_mode: 'Markdown', ...getMainMenuKeyboard() }); }
         else if (action === 'back_to_view') { await bot.editMessageText("👀 *View Your Learning History*\n\nWhich period would you like to see?", { chat_id: chatId, message_id: callbackQuery.message.message_id, parse_mode: 'Markdown', ...getViewOptionsKeyboard() }); }
         else if (action === 'stop_convo') { delete userStates[chatId]; await bot.editMessageText("Ok, discussion ended. What's next?", { chat_id: chatId, message_id: callbackQuery.message.message_id, ...getMainMenuKeyboard() }); }
@@ -361,7 +395,17 @@ bot.on('message', async (msg) => {
                     await bot.sendMessage(chatId, `❌ ${goalValidation.error}`);
                 }
                 break;
-            case 'ai_convo': const userReply = msg.text; await db.addLearning(chatId, `💭 Follow-up thought: ${userReply}`); const followUp = await ai.generateFollowUpQuestion(userReply); await bot.sendMessage(chatId, `🤔 ${followUp}\n\n*Keep the conversation going or /stop*`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✋ End Discussion', callback_data: 'stop_convo' }, { text: '📚 New Learning', callback_data: 'quick_learn' }]] } }); break;
+            case 'ai_convo':
+                if (!hasAI) {
+                    await bot.sendMessage(chatId, "AI conversation feature is not available.");
+                    delete userStates[chatId];
+                    break;
+                }
+                const userReply = msg.text;
+                await db.addLearning(chatId, `💭 Follow-up thought: ${userReply}`);
+                const followUp = await ai.generateFollowUpQuestion(userReply);
+                await bot.sendMessage(chatId, `🤔 ${followUp}\n\n*Keep the conversation going or /stop*`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✋ End Discussion', callback_data: 'stop_convo' }, { text: '📚 New Learning', callback_data: 'quick_learn' }]] } });
+                break;
         }
     } catch (error) { console.error('Message handling error:', error.message); await bot.sendMessage(chatId, "❌ Something went wrong. Please try again or use /start for help."); delete userStates[chatId]; }
 });

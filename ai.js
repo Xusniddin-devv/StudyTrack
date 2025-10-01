@@ -1,5 +1,14 @@
 // Enhanced AI module with better prompting and features
 
+// AI Model Configuration - use env var or default
+const AI_MODEL = process.env.AI_MODEL || "mistralai/mistral-7b-instruct";
+const API_KEY = process.env.OPENROUTER_API_KEY;
+
+// Log which model is being used
+if (API_KEY) {
+    console.log(`🤖 AI Model: ${AI_MODEL}`);
+}
+
 // A reusable helper function to call the OpenRouter API
 async function callOpenRouter(model, prompt, apiKey, systemPrompt = "", options = {}) {
     if (!apiKey) {
@@ -80,9 +89,9 @@ Guidelines:
 Just respond with the question - no extra text or explanations.`;
 
     return callOpenRouter(
-        "mistralai/mistral-7b-instruct",
+        AI_MODEL,
         learningEntry,
-        process.env.OPENROUTER_API_KEY_FAST,
+        API_KEY,
         systemPrompt,
         { temperature: 0.8, maxTokens: 100 }
     );
@@ -181,9 +190,9 @@ Keep it practical and motivating.`;
     }
 
     return callOpenRouter(
-        "qwen/qwen-coder-plus", // Using the better model for analysis
+        AI_MODEL,
         userPrompt,
-        process.env.OPENROUTER_API_KEY_SLOW,
+        API_KEY,
         systemPrompt,
         { temperature: 0.6, maxTokens: 400 }
     );
@@ -212,9 +221,9 @@ Format as a bulleted list with brief explanations.`;
     const userPrompt = `Based on these recent learnings, what related topics would you recommend exploring next?\n\n${learningText}`;
 
     return callOpenRouter(
-        "qwen/qwen-coder-plus",
+        AI_MODEL,
         userPrompt,
-        process.env.OPENROUTER_API_KEY_SLOW,
+        API_KEY,
         systemPrompt,
         { temperature: 0.7, maxTokens: 350 }
     );
@@ -266,9 +275,9 @@ Respond with ONLY the category name, nothing else.`;
 
     try {
         const suggestion = await callOpenRouter(
-            "mistralai/mistral-7b-instruct",
+            AI_MODEL,
             content,
-            process.env.OPENROUTER_API_KEY_FAST,
+            API_KEY,
             systemPrompt,
             { temperature: 0.3, maxTokens: 20 }
         );
@@ -298,9 +307,9 @@ Keep it practical and achievable. Format as a numbered list.`;
     const userPrompt = `Create a ${level} learning path for: ${topic}`;
 
     return callOpenRouter(
-        "qwen/qwen-coder-plus",
+        AI_MODEL,
         userPrompt,
-        process.env.OPENROUTER_API_KEY_SLOW,
+        API_KEY,
         systemPrompt,
         { temperature: 0.6, maxTokens: 500 }
     );
@@ -341,9 +350,9 @@ Just provide the question - no extra formatting or labels.`;
 
     try {
         return await callOpenRouter(
-            "mistralai/mistral-7b-instruct",
+            AI_MODEL,
             userPrompt,
-            process.env.OPENROUTER_API_KEY_FAST,
+            API_KEY,
             systemPrompt,
             { temperature: 0.7, maxTokens: 150 }
         );
